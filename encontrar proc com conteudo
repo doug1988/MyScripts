@@ -1,0 +1,167 @@
+ 
+
+IF OBJECT_ID('spWhereIsItUsed', 'P') IS NOT NULL
+DROP PROCEDURE spWhereIsItUsed;
+GO
+CREATE PROCEDURE spWhereIsItUsed
+  /* This Procedure is used in development work. 
+It searches through the code in the database for whatever string
+you care to specify and displays the name of each routine
+that the string is in, and its context (up to 255 characters
+around it) of EVERY occurence so you can see, for example, 
+whereabouts an object is being called. It is not really the 
+same as having the build script in the Query Analyser. This
+procedure makes it a lot quicker to find a problem.
+ 
+Obviously, the code can be hacked for a particular problem,
+as you end up with a table of all the routines in the database
+with the routine name and all the text.
+ 
+*/
+  @SearchString VARCHAR(40), --the string you want to search for 
+  @BackSpan INT = 21, --when you find a string, 
+  --how many characters back you show
+  @ForwardSpan INT = 40 --when you find a string, 
+--how many characters forward you show
+ 
+--e.g:
+-- spWhereIsItUsed  'raiserror'
+-- spWhereIsItUsed  'textptr',100,100
+-- spWhereIsItUsed  'blog[sg]',100,100 --find blogg or blogs
+-- spWhereIsItUsed  'b_gg',100,100     --find begg, bigg, etc
+AS
+DECLARE @ii INT;
+DECLARE @iiMax INT;
+DECLARE @ColID INT;
+DECLARE @objectID INT;
+DECLARE @currentProcedure INT;
+DECLARE @pointerValue VARBINARY(16);
+DECLARE @EndOfText INT;
+DECLARE @Chunk NVARCHAR(4000);
+DECLARE @pos INT;
+DECLARE @size INT;
+DECLARE @WhereWeAre INT; --index into string so far
+DECLARE @context INT;
+ 
+IF @BackSpan + @ForwardSpan > 255
+  BEGIN
+  RAISERROR(' sorry but your context span is just too great', 16, 1);
+  RETURN 1;
+  END;
+SET NOCOUNT ON;
+DECLARE @raw_text TABLE --create a table so we can iterate through it
+  --a row at a time in the correct order
+  (
+  ourID INT IDENTITY(1, 1), --
+  colid INT,
+  id INT,
+  chunk NVARCHAR(4000)
+  );
+--now get all the code routines into the table
+INSERT INTO @raw_text
+  (colid, id, chunk)
+  SELECT s.colid, s.id, s.text
+  FROM sys.syscomments s
+  WHERE OBJECTPROPERTY(s.id, 'IsExecuted') = 1
+    --view, procedure, function, or trigger
+    AND s.encrypted = 0
+  ORDER BY s.id, s.colid;
+ 
+--now we create the table of all the routines with their
+--text source in the correct order.
+CREATE TABLE #routine
+  (
+  ourID INT IDENTITY(1, 1),
+  objectName VARCHAR(80),
+  Definition TEXT
+  );
+ 
+-- start the loop, adding all the nvarchar(4000) chunks 
+SELECT @ii = MIN([@raw_text].ourID), @iiMax = MAX([@raw_text].ourID)
+  FROM @raw_text;
+ 
+WHILE @ii <= @iiMax
+  BEGIN
+  SELECT @ColID = [@raw_text].colid, @objectID = [@raw_text].id,
+    @Chunk = [@raw_text].chunk
+    FROM @raw_text
+    WHERE [@raw_text].ourID = @ii; --no sir. No cursors
+  IF @ColID = 1
+    BEGIN
+    INSERT INTO #routine
+      (objectName, Definition)
+      SELECT OBJECT_NAME(@objectID), @Chunk;
+    -- get the pointer for the current procedure name / colid 
+    SELECT @currentProcedure = @@Identity;
+    SELECT @pointerValue = TEXTPTR(#routine.Definition)
+      FROM #routine
+      WHERE #routine.ourID = @currentProcedure;
+    END;
+  ELSE
+    BEGIN
+    -- find out where to append the #temp table's value 
+    SELECT @EndOfText = DATALENGTH(#routine.Definition)
+      FROM #routine
+      WHERE #routine.ourID = @currentProcedure;
+ 
+    --Take a deep breath. We are dealing with text here
+    UPDATETEXT #routine.Definition @pointerValue @EndOfText 0 @Chunk;
+    END;
+  SELECT @ii = @ii + 1;
+  END;
+ 
+--select objectname,datalength(definition) from #routine
+ 
+DECLARE @results TABLE
+  (
+  ourID INT IDENTITY(1, 1),
+  ObjectName VARCHAR(40),
+  offset INT,
+  context VARCHAR(255)
+  );
+ 
+SELECT @ii = MIN(#routine.ourID), @iiMax = MAX(#routine.ourID)
+  FROM #routine;
+ 
+WHILE @ii <= @iiMax --avoid cursors. Do we look like amateurs?
+  BEGIN --for each routine...
+ 
+  SELECT @pos = 1, @size = DATALENGTH(#routine.Definition), @WhereWeAre = 1
+    FROM #routine
+    WHERE #routine.ourID = @ii;
+ 
+ 
+  --find all occurences of the string in the current text
+ 
+  WHILE @WhereWeAre < @size
+    BEGIN
+ 
+    SELECT @pos =
+      PATINDEX(
+                '%' + @SearchString + '%',
+                SUBSTRING(#routine.Definition, @WhereWeAre, 8000)
+              )
+      FROM #routine
+      WHERE #routine.ourID = @ii;
+    IF @pos > 0
+      BEGIN
+      SELECT @context = CASE WHEN @WhereWeAre + @pos - @BackSpan <= 1 THEN 1
+                        ELSE @WhereWeAre + @pos - @BackSpan
+                        END;
+      INSERT INTO @results
+        (ObjectName, offset, context)
+        SELECT #routine.objectName, @WhereWeAre + @pos,
+          SUBSTRING(#routine.Definition, @context, @BackSpan + @ForwardSpan)
+        FROM #routine
+        WHERE #routine.ourID = @ii;
+      SELECT @WhereWeAre = @WhereWeAre + @pos;
+      END;
+    ELSE
+    SELECT @WhereWeAre = @WhereWeAre + 6000;
+    END;
+  SELECT @ii = @ii + 1;
+  END;
+SELECT [@results].ObjectName, [@results].offset,
+  context = '...' + [@results].context + '...'
+  FROM @results;
+
