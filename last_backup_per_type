@@ -1,0 +1,21 @@
+
+SELECT  name ,
+        recovery_model_desc ,
+        state_desc ,
+        d AS 'Last Full			Backup' ,
+        i AS 'Last Differential Backup' ,
+        l AS 'Last Log			Backup'
+FROM    ( SELECT    db.name ,
+                    db.state_desc ,
+                    db.recovery_model_desc ,
+                    type ,
+                    backup_finish_date
+            FROM      master.sys.databases db (nolock)
+                    LEFT OUTER JOIN msdb.dbo.backupset a  (nolock)
+						ON a.database_name = db.name
+			where
+				db.database_id <> 2
+        ) AS Sourcetable 
+    PIVOT 
+        ( MAX(backup_finish_date) FOR type IN ( D, I, L ) ) AS MostRecentBackup
+ORDER BY 1
