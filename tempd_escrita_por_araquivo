@@ -1,0 +1,15 @@
+
+SELECT	mf.name,
+		vf.NumberReads,
+		vf.BytesRead,
+		vf.IoStallReadMS,
+		vf.NumberWrites,
+		vf.BytesWritten,
+		vf.IoStallWriteMS,
+		vf.IoStallMS,
+		vf.BytesOnDisk / POWER(1024, 2)	AS	MB_Size
+FROM	sys.fn_virtualfilestats(2, NULL) vf INNER JOIN sys.master_files mf
+		ON (
+				vf.DbId = mf.database_id AND
+				vf.FileId = mf.file_id
+			);
