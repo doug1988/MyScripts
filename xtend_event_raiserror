@@ -1,0 +1,95 @@
+use DbManagementDBA
+GO
+IF (OBJECT_ID('tempdb..#Eventos') IS NOT NULL) 
+		BEGIN 
+			DROP TABLE #Eventos
+		END	
+	CREATE TABLE #Eventos (ID INT NOT NULL IDENTITY(1,1)  primary key ,  Dt_Evento DATETIME , event_data XML)
+	GO
+	DECLARE @TimeZone			INT = DATEDIFF(HOUR, GETUTCDATE(), GETDATE())
+	DECLARE @Dt_Ultimo_Evento	DATETIME =ISNULL((SELECT MAX(Dt_Evento) FROM dbo.Historico_Erros_Banco WITH(NOLOCK)), '1990-01-01')
+	;WITH CTE AS (
+		SELECT CONVERT(XML, event_data) AS event_data
+		FROM sys.fn_xe_file_target_read_file(N'C:\Traces\*.xel', NULL, NULL, NULL)
+	)
+	INSERT #Eventos (Dt_Evento , event_data)
+	SELECT	    	
+		DATEADD(HOUR, @TimeZone, CTE.event_data.value('(//event/@timestamp)[1]', 'datetime')) AS Dt_Evento,
+		CTE.event_data			
+	FROM
+		CTE
+	WHERE
+		DATEADD(HOUR, @TimeZone, CTE.event_data.value('(//event/@timestamp)[1]', 'datetime')) > @Dt_Ultimo_Evento
+	SET QUOTED_IDENTIFIER ON
+
+
+	---323935
+	DECLARE @ID INT = 1 
+	DECLARE @MAX INT = (SELECT MAX(ID) FROM #Eventos ) 
+	WHILE @ID < = @MAX 
+		BEGIN
+			;with GetEvento
+			AS
+			(
+				SELECT
+					A.Dt_Evento,
+					xed.event_data.value				('(action[@name="session_id"]/value)[1]', 'int') AS [session_id],
+					xed.event_data.value				('(action[@name="database_name"]/value)[1]', 'varchar(100)') AS [database_name],
+					xed.event_data.value				('(action[@name="session_nt_username"]/value)[1]', 'varchar(100)') AS [session_nt_username],
+					xed.event_data.value				('(action[@name="username"]/value)[1]', 'varchar(100)') AS [username],
+					xed.event_data.value				('(action[@name="client_hostname"]/value)[1]', 'varchar(100)') AS [client_hostname],
+					xed.event_data.value				('(action[@name="client_app_name"]/value)[1]', 'varchar(100)') AS [client_app_name],
+					xed.event_data.value				('(data[@name="error_number"]/value)[1]', 'int') AS [error_number],
+					xed.event_data.value				('(data[@name="severity"]/value)[1]', 'int') AS [severity],
+					xed.event_data.value				('(data[@name="state"]/value)[1]', 'int') AS [state],
+					TRY_CAST((xed.event_data.value		(N'(action[@name="sql_text"]/value)[1]', 'varchar(max)' ) )AS XML )   AS [sql_text],
+					xed.event_data.value				(N'(data[@name="message"]/value)[1]', 'varchar(max)') AS [message]
+				FROM
+					#Eventos A
+				 CROSS APPLY A.event_data.nodes('//event') AS xed (event_data)
+				WHERE 
+					A.ID = @ID 
+			)	 	
+			INSERT  dbo.Historico_Erros_Banco
+			(
+				Dt_Evento
+			,	session_id
+			,	database_name
+			,	session_nt_username
+			,	username
+			,	client_hostname
+			,	client_app_name
+			,	error_number
+			,	severity
+			,	state
+			,	sql_text
+			,	message
+			)
+			select  
+				Dt_Evento
+			,	session_id
+			,	database_name
+			,	session_nt_username
+			,	username
+			,	client_hostname
+			,	client_app_name
+			,	error_number
+			,	severity
+			,	state
+			,	sql_text
+			,	message
+			from 
+				GetEvento as A 
+				
+									
+			SET @ID  = @ID +  1
+		END
+
+
+
+ select 
+	*  
+ from 
+	Historico_Erros_Banco 
+
+order by 1
