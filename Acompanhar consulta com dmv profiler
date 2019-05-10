@@ -1,0 +1,58 @@
+
+
+/*     https://www.fabriciolima.net/blog/2018/09/11/queries-do-dia-a-dia-como-monitorar-o-percentual-de-execucao-na-criacao-ou-rebuild-de-um-indice/ */
+SET STATISTICS PROFILE ON
+/********************************************/
+SELECT TOP 500000 * 
+from 
+	sys.all_columns as A
+CROSS APPLY 
+	sys.all_columns as B
+/********************************************/
+SET STATISTICS PROFILE OFF
+
+/*************RODAR EM UMA NOVA QUERY*******************************/
+SELECT  session_id ,
+        node_id ,
+        physical_operator_name ,
+        SUM(row_count) row_count ,
+        SUM(estimate_row_count) AS estimate_row_count ,
+        IIF(COUNT(thread_id) = 0, 1, COUNT(thread_id)) [Threads] ,
+        CAST(SUM(row_count) * 100. / SUM(estimate_row_count) AS DECIMAL(30, 2)) [% Complete] ,
+        CONVERT(TIME, DATEADD(ms, MAX(elapsed_time_ms), 0)) [Operator time] ,
+        DB_NAME(database_id) + '.' + OBJECT_SCHEMA_NAME(QP.object_id,
+                                                        qp.database_id) + '.'
+        + OBJECT_NAME(QP.object_id, qp.database_id) [Object Name]
+FROM    
+	sys.dm_exec_query_profiles QP
+GROUP BY session_id ,
+        node_id ,
+        physical_operator_name ,
+        qp.database_id ,
+        QP.OBJECT_ID ,
+        QP.index_id
+ORDER BY session_id ,
+        node_id
+GO
+SELECT  QP.session_id ,
+        QP.node_id ,
+        QP.physical_operator_name ,
+        DB_NAME(database_id) + '.' + OBJECT_SCHEMA_NAME(QP.object_id,
+                                                        qp.database_id) + '.'
+        + OBJECT_NAME(QP.object_id, qp.database_id) [Object Name] ,
+        OT.task_state ,
+        MAX(WT.wait_duration_ms) [wait_duration_ms] ,
+        WT.wait_type
+FROM    sys.dm_exec_query_profiles QP
+        INNER JOIN sys.dm_os_tasks OT 
+   ON OT.task_address = QP.task_address
+        LEFT  JOIN sys.dm_os_waiting_tasks WT 
+   ON WT.waiting_task_address = QP.task_address
+GROUP BY QP.session_id ,
+        QP.node_id ,
+        QP.physical_operator_name ,
+        OT.task_state ,
+        QP.database_id ,
+        QP.object_id ,
+        WT.wait_type
+/*************RODAR EM UMA NOVA QUERY*******************************/
