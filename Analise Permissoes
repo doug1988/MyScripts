@@ -1,0 +1,98 @@
+USE DBMANAGEMENTDBA 
+GO
+
+CREATE OR ALTER PROC Usp_AnalisarPermissoes
+(
+	@DBNAME			VARCHAR(500) = NULL
+,	@UserName		VARCHAR(500) = NULL
+,	@RoleName		VARCHAR(500) = NULL
+,	@LoginBit		BIT			 = 0 
+)
+AS
+BEGIN
+	create table #temp
+	(
+		Id INT IDENTITY(1,1)
+	,	name varchar(500)
+	)
+	insert #temp (name)
+	select name  
+	from sys.databases 
+	where 
+		 database_id > 4   
+	and  state_desc = 'ONLINE'   
+	AND  name  = ISNULL(@DBNAME , name)  
+	order by 1 
+
+	declare @banco varchar(500) = ''
+	declare @exec nvarchar(max)
+	declare @i int = 1
+	create  table  #table  
+	(	
+		ID					INT  IDENTITY(1,1) PRIMARY KEY NOT NULL
+	,	DBNAME				nvarchar(500)
+	,	UserName			nvarchar(500)
+	,	RoleName			nvarchar(500)
+	,	LoginName			nvarchar(500)
+	,	DefDBName			nvarchar(500)
+	,	DefSchemaName		nvarchar(500)
+	,	UserID				nvarchar(500)
+	,	SID					nvarchar(500)
+	)
+	while @i <= (select max(id) from #temp)
+		begin
+			select @banco =  name from #temp where id = @i
+			SET @exec  = 'EXECUTE ' + @banco + '.dbo.sp_helpuser'
+			insert #table
+			(
+				UserName			
+			,	RoleName			
+			,	LoginName			
+			,	DefDBName			
+			,	DefSchemaName		
+			,	UserID				
+			,	SID	
+			)
+			exec (@exec)
+		
+			update #table set DBNAME = @banco where DBNAME is null
+		
+			set @i = @i + 1 	
+		end
+
+		
+		IF @LoginBit = 0
+		BEGIN
+			SELECT 
+				* 
+			FROM 
+				#table     
+			WHERE
+				UserName = ISNULL(  @UserName, UserName)
+			AND	RoleName = ISNULL(  @RoleName, RoleName) 
+			ORDER BY 1 
+		END
+		ELSE
+		BEGIN
+			SELECT 
+				* 
+			FROM 
+				#table     
+			WHERE
+				UserName = ISNULL(  @UserName, UserName)
+			AND	RoleName = ISNULL(  @RoleName, RoleName) 
+			AND LoginName IS NULL
+			AND UserName NOT IN 
+			(
+				'guest'
+			,	'INFORMATION_SCHEMA'
+			,	'sys'
+			,	'dbo'	
+			)
+			ORDER BY 1 
+		END;
+	DROP TABLE IF EXISTS #temp
+	DROP TABLE IF EXISTS #table
+
+END;
+GO
